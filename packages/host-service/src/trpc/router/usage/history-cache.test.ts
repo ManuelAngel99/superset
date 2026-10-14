@@ -18,7 +18,11 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("createUsageHistoryCache", () => {
 	test("returns immediately and starts one scan while one is running", async () => {
-		const cache = createUsageHistoryCache({ ttlMs: 1000, now: () => 0 });
+		const cache = createUsageHistoryCache({
+			ttlMs: 1000,
+			retryAfterMs: 100,
+			now: () => 0,
+		});
 		const scan = deferred();
 		let scans = 0;
 		const start = () => {
@@ -33,6 +37,7 @@ describe("createUsageHistoryCache", () => {
 			failed: false,
 		});
 		cache.get(30, start);
+		await flush();
 		expect(scans).toBe(1);
 
 		scan.resolve(history(5));
@@ -46,7 +51,11 @@ describe("createUsageHistoryCache", () => {
 
 	test("serves the stale result while it refreshes after the ttl", async () => {
 		let clock = 0;
-		const cache = createUsageHistoryCache({ ttlMs: 1000, now: () => clock });
+		const cache = createUsageHistoryCache({
+			ttlMs: 1000,
+			retryAfterMs: 100,
+			now: () => clock,
+		});
 		const first = deferred();
 		cache.get(7, () => first.promise);
 		first.resolve(history(1));
@@ -62,7 +71,11 @@ describe("createUsageHistoryCache", () => {
 
 	test("keeps the last result and reports a failed scan", async () => {
 		let clock = 0;
-		const cache = createUsageHistoryCache({ ttlMs: 1000, now: () => clock });
+		const cache = createUsageHistoryCache({
+			ttlMs: 1000,
+			retryAfterMs: 100,
+			now: () => clock,
+		});
 		const first = deferred();
 		cache.get(7, () => first.promise);
 		first.resolve(history(1));
@@ -78,5 +91,49 @@ describe("createUsageHistoryCache", () => {
 			history: history(1),
 			failed: true,
 		});
+	});
+	test("records a synchronous scan error as a failure", async () => {
+		const cache = createUsageHistoryCache({
+			ttlMs: 1000,
+			retryAfterMs: 100,
+			now: () => 0,
+		});
+		expect(() =>
+			cache.get(7, () => {
+				throw new Error("db read failed");
+			}),
+		).not.toThrow();
+		await flush();
+		expect(cache.get(7, () => deferred().promise)).toMatchObject({
+			failed: true,
+			scanning: false,
+		});
+	});
+
+	test("waits for the retry delay after a failed scan", async () => {
+		let clock = 0;
+		const cache = createUsageHistoryCache({
+			ttlMs: 1000,
+			retryAfterMs: 100,
+			now: () => clock,
+		});
+		const failing = deferred();
+		cache.get(7, () => failing.promise);
+		failing.reject(new Error("scan failed"));
+		await flush();
+
+		let scans = 0;
+		const start = () => {
+			scans++;
+			return deferred().promise;
+		};
+		clock = 99;
+		cache.get(7, start);
+		await flush();
+		expect(scans).toBe(0);
+		clock = 100;
+		cache.get(7, start);
+		await flush();
+		expect(scans).toBe(1);
 	});
 });

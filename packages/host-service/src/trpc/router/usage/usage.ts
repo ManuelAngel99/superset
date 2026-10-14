@@ -127,7 +127,18 @@ function usageHistoryInput(ctx: HostServiceContext, days: number) {
 	return { days, cwdLabels };
 }
 
-const usageHistoryCache = createUsageHistoryCache({ ttlMs: 5 * 60 * 1000 });
+const usageHistoryCache = createUsageHistoryCache({
+	ttlMs: 5 * 60 * 1000,
+	retryAfterMs: 60 * 1000,
+});
+
+function usageHistoryRunOptions(days: number) {
+	return {
+		dedupeKey: `usage-history:${days}`,
+		strategy: "coalesce" as const,
+		timeoutMs: 110_000,
+	};
+}
 
 export const leaderboardPayloadInput = z.object({
 	days: z.number().int().min(1).max(MAX_BACKFILL_DAYS),
@@ -382,10 +393,7 @@ export const usageRouter = router({
 				// transcript cwds to real workspaces instead of guessing from
 				// directory names.
 				prepare: ({ ctx, input }) => usageHistoryInput(ctx, input.days),
-				options: ({ input }) => ({
-					dedupeKey: `usage-history:${input.days}`,
-					timeoutMs: 110_000,
-				}),
+				options: ({ input }) => usageHistoryRunOptions(input.days),
 			}),
 		),
 
@@ -401,7 +409,7 @@ export const usageRouter = router({
 				getHostWorkerPool().run(
 					usageHistoryTask,
 					usageHistoryInput(ctx, input.days),
-					{ dedupeKey: `usage-history:${input.days}`, timeoutMs: 110_000 },
+					usageHistoryRunOptions(input.days),
 				),
 			),
 		),
